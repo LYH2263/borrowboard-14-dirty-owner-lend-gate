@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app import seed
 from app.db import connect
-from app.engines.borrow_rules import can_lend, classify_loans
+from app.engines.borrow_rules import annotate_item, can_lend, classify_loans
 
 app = FastAPI(title="Borrowboard", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -17,12 +17,20 @@ def health(): return {"ok": True, "project": "borrowboard"}
 
 @app.get("/api/items")
 def items():
-    c = connect(); rows = [dict(r) for r in c.execute("SELECT * FROM items")]; c.close(); return rows
+    c = connect()
+    rows = [annotate_item(dict(r)) for r in c.execute("SELECT * FROM items ORDER BY id")]
+    c.close()
+    return rows
 
 @app.get("/api/board")
 def board():
     c = connect()
-    available = [dict(r) for r in c.execute("SELECT * FROM items WHERE status='available'")]
+    # status=available 的物品再过一遍资格闸：合格进可借栏并计入可借数，
+    # 脏物落 blocked 分区，三处（可借栏/物主栏/顶细条）都不计为可借。
+    pool = [annotate_item(dict(r))
+            for r in c.execute("SELECT * FROM items WHERE status='available'")]
+    available = [r for r in pool if r["eligible"]]
+    blocked = [r for r in pool if not r["eligible"]]
     loans = [dict(r) for r in c.execute(
         """SELECT loans.*, items.title FROM loans JOIN items ON items.id=loans.item_id
            WHERE loans.status='active'""")]
@@ -30,9 +38,15 @@ def board():
     cls = classify_loans(loans, date.today().isoformat())
     return {
         "available": available,
+        "blocked": blocked,
         "active": cls["active"],
         "overdue": cls["overdue"],
-        "counts": {"available": len(available), "active": len(cls["active"]), "overdue": len(cls["overdue"])},
+        "counts": {
+            "available": len(available),
+            "blocked": len(blocked),
+            "active": len(cls["active"]),
+            "overdue": len(cls["overdue"]),
+        },
     }
 
 class ItemIn(BaseModel):
@@ -56,7 +70,9 @@ def lend(iid: int, body: LendIn):
     item = c.execute("SELECT * FROM items WHERE id=?", (iid,)).fetchone()
     if not item: c.close(); raise HTTPException(404, "item")
     active = c.execute("SELECT COUNT(*) c FROM loans WHERE item_id=? AND status='active'", (iid,)).fetchone()["c"]
-    check = can_lend(item["status"], active)
+    # 资格闸（脏物/无主）先于互斥闸；拒绝时直接返回，下面的 INSERT/UPDATE
+    # 一条都不执行——不会把 data_quality 改成 clean，也不会补写 owner。
+    check = can_lend(item["status"], active, item=dict(item))
     if not check["ok"]:
         c.close(); raise HTTPException(409, check["reason"])
     cur = c.execute(

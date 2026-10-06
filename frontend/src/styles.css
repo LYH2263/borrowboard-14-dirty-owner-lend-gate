@@ -24,3 +24,13 @@ input { border: 1px solid var(--line); padding: 6px 8px; font: inherit; width: 1
 .topnav { display: flex; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .topnav a { color: inherit; }
 .muted { color: #5a5045; font-size: 13px; }
+.blocked { background: #f0e6d2; border-style: dashed; }
+.blocked-head { margin: 18px 0 8px; font-size: 15px; color: #6b5a44; }
+.chip {
+  display: inline-block; font-size: 11px; padding: 1px 7px; margin-left: 6px;
+  border: 1px solid var(--line); border-radius: 9px; vertical-align: middle;
+}
+.chip-ok { background: #dfe8d0; }
+.chip-block { background: #e6c9bd; }
+.btn-try { background: #8a7a66; }
+.deny-note { margin-top: 6px; font-size: 13px; color: #8a3b22; font-weight: 600; }

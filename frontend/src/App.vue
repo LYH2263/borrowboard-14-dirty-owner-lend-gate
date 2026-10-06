@@ -2,6 +2,7 @@
   <div>
     <div class="status-bar">
       <span>可借 {{ counts.available || 0 }}</span>
+      <span>暂不可借 {{ counts.blocked || 0 }}</span>
       <span>在借 {{ counts.active || 0 }}</span>
       <span>逾期 {{ counts.overdue || 0 }}</span>
     </div>
