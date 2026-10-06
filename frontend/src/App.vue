@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="status-bar">
-      <span>可借 {{ counts.available || 0 }}</span>
+      <span title="含已放行的脏物/无主物">可借 {{ counts.available || 0 }}</span>
       <span>在借 {{ counts.active || 0 }}</span>
       <span>逾期 {{ counts.overdue || 0 }}</span>
     </div>

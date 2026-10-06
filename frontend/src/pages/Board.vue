@@ -2,12 +2,21 @@
   <div class="split">
     <section class="pane">
       <h2>可借物</h2>
-      <div v-for="i in board.available" :key="i.id" class="item">
+      <div v-for="o in outcomes" :key="o.id" class="outcome" :class="{ ok: o.ok, fail: !o.ok }">
+        <strong>{{ o.title }}</strong>：{{
+          o.ok
+            ? ('本次扣到 ✓ 借据 #' + o.loan_id + (o.dirty ? '（仍是脏物·无主，未洗数据）' : ''))
+            : ('本次没扣到 · ' + o.detail)
+        }}
+      </div>
+      <div v-for="i in board.available" :key="i.id" class="item" :class="{ 'dirty-item': i.dirty }">
         <strong>{{ i.title }}</strong>
+        <span v-if="i.dirty" class="badge dirty" title="数据质量为脏且无主，政策放行：可借但不洗数据">脏物·放行</span>
+        <span v-else-if="i.owner_missing" class="badge warn">无主</span>
         <div class="muted">物主 {{ i.owner || '—' }}</div>
         <input v-model="forms[i.id].borrower" placeholder="借用人" />
         <input v-model="forms[i.id].due_date" placeholder="应还日 YYYY-MM-DD" />
-        <button @click="lend(i.id)">借出通过</button>
+        <button @click="lend(i)">借出通过</button>
       </div>
     </section>
     <section class="pane">
@@ -26,13 +35,20 @@ import { api } from '../api'
 const board = inject('board')
 const reload = inject('reloadBoard')
 const forms = reactive({})
+const outcomes = reactive({})   // itemId -> 最近一次"扣到/没扣到"
 watch(board, (b) => {
   for (const i of (b.available || [])) {
     if (!forms[i.id]) forms[i.id] = { borrower: '邻居', due_date: '2026-12-31' }
   }
 }, { immediate: true, deep: true })
-async function lend(id) {
-  await api('/items/' + id + '/lend', { method: 'POST', body: JSON.stringify(forms[id]) })
+async function lend(i) {
+  try {
+    const r = await api('/items/' + i.id + '/lend', { method: 'POST', body: JSON.stringify(forms[i.id]) })
+    outcomes[i.id] = { id: i.id, title: i.title, ok: true, loan_id: r.loan_id, dirty: r.dirty }
+  } catch (e) {
+    // 409 等：本次没扣到，物品原样留在可借栏（后端不洗数据、不补 owner）
+    outcomes[i.id] = { id: i.id, title: i.title, ok: false, detail: e.message }
+  }
   await reload()
 }
 async function ret(id) {

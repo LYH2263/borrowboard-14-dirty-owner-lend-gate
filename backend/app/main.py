@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app import seed
 from app.db import connect
-from app.engines.borrow_rules import can_lend, classify_loans
+from app.engines.borrow_rules import can_lend, classify_loans, item_flags
 
 app = FastAPI(title="Borrowboard", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -15,14 +15,20 @@ def _startup(): seed.init_db()
 @app.get("/api/health")
 def health(): return {"ok": True, "project": "borrowboard"}
 
+def _decorate(r) -> dict:
+    """Row + advisory eligibility flags. Flags never hide an item."""
+    d = dict(r)
+    d.update(item_flags(d))
+    return d
+
 @app.get("/api/items")
 def items():
-    c = connect(); rows = [dict(r) for r in c.execute("SELECT * FROM items")]; c.close(); return rows
+    c = connect(); rows = [_decorate(r) for r in c.execute("SELECT * FROM items")]; c.close(); return rows
 
 @app.get("/api/board")
 def board():
     c = connect()
-    available = [dict(r) for r in c.execute("SELECT * FROM items WHERE status='available'")]
+    available = [_decorate(r) for r in c.execute("SELECT * FROM items WHERE status='available'")]
     loans = [dict(r) for r in c.execute(
         """SELECT loans.*, items.title FROM loans JOIN items ON items.id=loans.item_id
            WHERE loans.status='active'""")]
@@ -32,6 +38,7 @@ def board():
         "available": available,
         "active": cls["active"],
         "overdue": cls["overdue"],
+        # Dirty available items are released, so they count here too.
         "counts": {"available": len(available), "active": len(cls["active"]), "overdue": len(cls["overdue"])},
     }
 
@@ -52,18 +59,38 @@ class LendIn(BaseModel):
 
 @app.post("/api/items/{iid}/lend")
 def lend(iid: int, body: LendIn):
+    # Autocommit connection + explicit BEGIN IMMEDIATE: two concurrent lends of
+    # the SAME item serialise on the row lock and exactly one wins; lends of
+    # DIFFERENT items (e.g. drill vs dirty item) never block each other.
     c = connect()
-    item = c.execute("SELECT * FROM items WHERE id=?", (iid,)).fetchone()
-    if not item: c.close(); raise HTTPException(404, "item")
-    active = c.execute("SELECT COUNT(*) c FROM loans WHERE item_id=? AND status='active'", (iid,)).fetchone()["c"]
-    check = can_lend(item["status"], active)
-    if not check["ok"]:
-        c.close(); raise HTTPException(409, check["reason"])
-    cur = c.execute(
-        "INSERT INTO loans(item_id,borrower,status,due_date,lent_at) VALUES (?,?,?,?,?)",
-        (iid, body.borrower, "active", body.due_date, datetime.now(timezone.utc).isoformat()))
-    c.execute("UPDATE items SET status='on_loan' WHERE id=?", (iid,))
-    c.commit(); lid = cur.lastrowid; c.close(); return {"loan_id": lid}
+    c.isolation_level = None
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        item = c.execute("SELECT * FROM items WHERE id=?", (iid,)).fetchone()
+        if not item:
+            c.execute("ROLLBACK"); c.close(); raise HTTPException(404, "item")
+        active = c.execute(
+            "SELECT COUNT(*) c FROM loans WHERE item_id=? AND status='active'", (iid,)).fetchone()["c"]
+        check = can_lend(item["status"], active, item["data_quality"] or "clean")
+        if not check["ok"]:
+            # Reject without touching data_quality or owner: a failed lend must
+            # not launder dirty data or invent an owner.
+            c.execute("ROLLBACK"); c.close(); raise HTTPException(409, check["reason"])
+        cur = c.execute(
+            "INSERT INTO loans(item_id,borrower,status,due_date,lent_at) VALUES (?,?,?,?,?)",
+            (iid, body.borrower, "active", body.due_date, datetime.now(timezone.utc).isoformat()))
+        # Only status flips. data_quality/owner are deliberately never written.
+        c.execute("UPDATE items SET status='on_loan' WHERE id=?", (iid,))
+        c.execute("COMMIT")
+        lid = cur.lastrowid
+        dq, owner = item["data_quality"], item["owner"]
+        c.close()
+        return {"loan_id": lid, "data_quality": dq, "owner": owner, "dirty": (dq == "dirty"),
+                "owner_missing": not bool(owner and owner.strip())}
+    except HTTPException:
+        raise
+    except Exception:
+        c.execute("ROLLBACK"); c.close(); raise
 
 @app.post("/api/loans/{lid}/return")
 def return_loan(lid: int):

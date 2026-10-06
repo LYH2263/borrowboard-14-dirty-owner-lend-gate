@@ -24,3 +24,14 @@ input { border: 1px solid var(--line); padding: 6px 8px; font: inherit; width: 1
 .topnav { display: flex; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .topnav a { color: inherit; }
 .muted { color: #5a5045; font-size: 13px; }
+.badge {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 10px;
+  font-size: 11px; border: 1px solid var(--line); vertical-align: middle;
+}
+.badge.dirty { background: #efe6cf; color: #6b5414; border-color: #b08f2e; }
+.badge.warn { background: #f3ead7; color: #5a5045; }
+.dirty-item { outline: 1px dashed #b08f2e; }
+.outcome {
+  border: 1px solid var(--line); padding: 8px 12px; margin-bottom: 10px; font-size: 13px; background: #eef3e4;
+}
+.outcome.fail { background: #f3d9d0; }
